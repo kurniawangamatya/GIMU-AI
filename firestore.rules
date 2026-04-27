@@ -1,0 +1,48 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isValidUser(data) {
+      return data.uid == request.auth.uid && 
+             data.email is string && 
+             data.email.size() <= 256 &&
+             (data.role == 'user' || (data.email == 'kurniawangamatya37@gmail.com' && data.role == 'admin'));
+    }
+
+    function isValidScan(data) {
+      return data.userId == request.auth.uid &&
+             data.originalImageUrl is string &&
+             data.enhancedImageUrl is string &&
+             data.createdAt == request.time;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow create: if isSignedIn() && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && 
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clinicName', 'displayName']);
+    }
+
+    match /scans/{scanId} {
+      allow create: if isSignedIn() && isValidScan(request.resource.data);
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow get, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "entities": {
+    "users": {
+      "title": "User Profiles",
+      "description": "Registered dental professionals using the platform.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "clinicName": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email"]
+    },
+    "scans": {
+      "title": "Smile Scans",
+      "description": "Patient smile transformations and analysis.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "originalImageUrl": { "type": "string" },
+        "enhancedImageUrl": { "type": "string" },
+        "analysis": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "originalImageUrl", "enhancedImageUrl"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "users",
+      "description": "User profile data."
+    },
+    "/scans/{scanId}": {
+      "schema": "scans",
+      "description": "Collection of dental smile enhancement scans."
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "GIMU.AI",
+  "description": "Professional AI Smile Enhancer for dental clinics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["Image Analysis", "Image Generation"]
+}
