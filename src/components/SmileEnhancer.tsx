@@ -1,7 +1,10 @@
 import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Upload, ImageIcon, Sparkles, ArrowRight, Check, Download, Share2, Loader2, RefreshCw } from 'lucide-react';
+import { Upload, ImageIcon, Sparkles, ArrowRight, Check, Download, Share2, Loader2, RefreshCw, Lock, Coins } from 'lucide-react';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import { enhanceSmile, analyzeSmileFeedback } from '../lib/gemini';
+import { useAuth } from '../contexts/AuthContext';
 
 interface ComparisonProps {
   before: string;
@@ -54,12 +57,23 @@ const ImageComparison = ({ before, after }: ComparisonProps) => {
   );
 };
 
-export default function SmileEnhancer() {
+export default function SmileEnhancer({ onOpenShop }: { onOpenShop?: () => void }) {
+  const { user, userData, login, deductCredit } = useAuth();
   const [image, setImage] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
+  const [prompt, setPrompt] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const presets = [
+    { name: 'Natural Enhance', icon: '✨' },
+    { name: 'Hollywood', icon: '🎬' },
+    { name: 'Straighten', icon: '📏' },
+    { name: 'Veneer Preview', icon: '⭐', special: true },
+    { name: 'Whitening', icon: '🦷' },
+  ];
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -74,14 +88,107 @@ export default function SmileEnhancer() {
     }
   };
 
+  const handleDownload = async () => {
+    if (!result) return;
+    try {
+      const response = await fetch(result);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `SMILE_${new Date().getTime()}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Download failed:', error);
+      alert('Gagal mendownload gambar. Silakan coba lagi.');
+    }
+  };
+
+  const ensureImageSize = (base64: string, maxDimension = 800): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > maxDimension) {
+            height *= maxDimension / width;
+            width = maxDimension;
+          }
+        } else {
+          if (height > maxDimension) {
+            width *= maxDimension / height;
+            height = maxDimension;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        // Use jpeg with 0.6 quality to keep size small for Firestore
+        resolve(canvas.toDataURL('image/jpeg', 0.6));
+      };
+      img.onerror = () => resolve(base64);
+      img.src = base64;
+    });
+  };
+
+  const saveGeneration = async (beforeUrl: string, afterUrl: string, feedback: string) => {
+    if (!user) return;
+    try {
+      // Downscale images before saving to Firestore (1MB limit)
+      const [smallBefore, smallAfter] = await Promise.all([
+        ensureImageSize(beforeUrl),
+        ensureImageSize(afterUrl)
+      ]);
+
+      await addDoc(collection(db, 'generations'), {
+        userId: user.uid,
+        type: 'smile',
+        beforeUrl: smallBefore,
+        afterUrl: smallAfter,
+        prompt: prompt || 'Natural Enhance',
+        feedback: feedback,
+        createdAt: serverTimestamp()
+      });
+    } catch (error) {
+      console.error('Error saving generation:', error);
+    }
+  };
+
   const processImage = async () => {
     if (!image) return;
+    if (!user) {
+      login();
+      return;
+    }
+
+    if ((userData?.credits ?? 0) < 1) {
+      if (onOpenShop) {
+        onOpenShop();
+      } else {
+        alert("Sisa koin Anda habis. Silakan beli koin untuk melanjutkan.");
+      }
+      return;
+    }
+
     setIsProcessing(true);
     
     try {
       const mimeType = image.split(',')[0].split(':')[1].split(';')[0];
       const base64Data = image.split(',')[1];
       
+      const success = await deductCredit(1);
+      if (!success) {
+        throw new Error("Credit deduction failed");
+      }
+
       const [feedback, enhanced] = await Promise.all([
         analyzeSmileFeedback(base64Data, mimeType),
         enhanceSmile(base64Data, mimeType)
@@ -89,8 +196,12 @@ export default function SmileEnhancer() {
       
       setAnalysis(feedback);
       setResult(enhanced);
+      
+      // Save to history
+      await saveGeneration(image, enhanced, feedback);
 
     } catch (error) {
+      console.error(error);
       alert("Failed to process image. Please try again.");
     } finally {
       setIsProcessing(false);
@@ -104,184 +215,184 @@ export default function SmileEnhancer() {
   };
 
   return (
-    <section className="py-20 px-6 max-w-7xl mx-auto flex flex-col md:flex-row gap-12 items-center md:items-start">
-      <div className="flex-1 space-y-8 md:sticky md:top-32">
-        <div className="space-y-4">
-          <motion.div
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="inline-flex items-center gap-2 px-3 py-1 bg-brand-50 text-brand-600 rounded-full text-[10px] font-bold tracking-widest uppercase border border-brand-100"
-          >
-            <Sparkles size={12} /> Next-Gen AI Simulation
-          </motion.div>
-          <motion.h1 
-            className="text-5xl md:text-7xl font-display font-bold text-slate-900 leading-[1.1] tracking-tight"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-          >
-            Perfect smiles, <br/>
-            <span className="text-brand-600">reimagined.</span>
-          </motion.h1>
-          <motion.p 
-            className="text-lg text-slate-500 max-w-lg leading-relaxed"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-          >
-            Upload a patient photo to generate a high-precision clinical preview of cosmetic enhancements in seconds. 
-          </motion.p>
-        </div>
-
-        {analysis && (
-          <motion.div 
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="glass-card p-6 border-l-4 border-l-brand-500"
-          >
-            <h3 className="text-xs font-bold mb-3 flex items-center gap-2 text-slate-400 uppercase tracking-widest">
-              <Sparkles size={14} className="text-brand-500" /> AI CLINICAL ANALYSIS
-            </h3>
-            <p className="text-slate-700 font-medium leading-relaxed italic">"{analysis}"</p>
-          </motion.div>
-        )}
-
-        <div className="flex flex-wrap gap-4 pt-4">
-          {!result && image && (
-            <button 
-              disabled={isProcessing}
-              onClick={processImage}
-              className="btn-primary"
-            >
-              {isProcessing ? (
-                <>
-                  <Loader2 className="animate-spin" size={20} /> Processing...
-                </>
-              ) : (
-                <>
-                  Generate Preview <ArrowRight size={20} />
-                </>
-              )}
-            </button>
-          )}
-
-          {result && (
-            <div className="flex gap-4">
-              <button className="btn-primary">
-                <Download size={20} /> Export Plan
-              </button>
-              <button className="btn-secondary">
-                <Share2 size={20} /> Share
-              </button>
+    <div className="bg-slate-50 min-h-screen pb-32">
+      {/* Dark Hero Banner */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-4 sm:pt-10">
+        <div className="bg-[#1a1a1a] rounded-[2rem] sm:rounded-[3.5rem] p-6 sm:p-12 lg:p-16 relative overflow-hidden flex flex-col lg:flex-row items-center gap-8 lg:gap-12">
+          <div className="flex-1 space-y-4 sm:space-y-8 relative z-10 w-full text-center lg:text-left">
+            <div className="space-y-3 sm:space-y-4">
+              <p className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-widest">SMILE TOOL · STEP 1 / 3</p>
+              <h1 className="text-3xl sm:text-5xl lg:text-6xl font-bold text-white leading-tight tracking-tight">
+                Transform a smile <br className="hidden sm:block"/> in seconds.
+              </h1>
+              <p className="text-slate-400 text-sm sm:text-lg max-w-md mx-auto lg:mx-0">
+                Upload a patient photo, pick a direction, and keep every detail that matters.
+              </p>
             </div>
-          )}
+            
+            <div className="flex flex-wrap justify-center lg:justify-start gap-3 sm:gap-6 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+              <div className="flex items-center gap-2">
+                <Check size={12} className="text-emerald-500" />
+                Photos never train models
+              </div>
+              <div className="flex items-center gap-2">
+                <Sparkles size={12} className="text-brand-400" />
+                Under 20 seconds
+              </div>
+            </div>
+          </div>
 
-          {image && (
-            <button 
-              onClick={reset}
-              className="btn-secondary"
-            >
-              <RefreshCw size={20} /> Start New
-            </button>
-          )}
+          <div className="w-full max-w-md lg:max-w-xl relative shrink-0">
+            <div className="aspect-[16/9] rounded-2xl overflow-hidden bg-slate-800 relative group">
+               <img src="https://images.unsplash.com/photo-1595152772835-219674b2a8a6?auto=format&fit=crop&q=80&w=1200" alt="Before/After Preview" className="w-full h-full object-cover opacity-80" />
+               <div className="absolute inset-0 flex">
+                  <div className="flex-1 relative border-r border-white/20">
+                    <span className="absolute top-4 left-4 bg-black/60 backdrop-blur px-2 py-1 rounded text-[8px] font-black text-white uppercase tracking-widest">BEFORE</span>
+                  </div>
+                  <div className="flex-1 relative">
+                    <span className="absolute top-4 right-4 bg-black/60 backdrop-blur px-2 py-1 rounded text-[8px] font-black text-white uppercase tracking-widest">AFTER</span>
+                  </div>
+               </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="flex-1 w-full max-w-2xl">
-        <AnimatePresence mode="wait">
-          {!image ? (
-            <motion.div 
-              key="upload"
-              className="glass-card p-10 md:p-16 text-center group cursor-pointer hover:bg-white/50 transition-all border-dashed border-2 border-white/80"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <div className="mb-8 inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-brand-50 text-brand-600 group-hover:scale-110 group-hover:bg-brand-100 transition-all shadow-xl shadow-brand-100">
-                <Upload size={32} />
-              </div>
-              <h3 className="text-2xl font-bold mb-4 text-slate-900">Patient Upload</h3>
-              <p className="text-slate-500 mb-8 max-w-xs mx-auto">Drop a portrait photo here or click to browse. Supports JPG, PNG, WebP up to 10MB.</p>
-              
-              <div className="bg-white/40 p-5 rounded-2xl border border-white/60 mb-8">
-                <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">
-                  <span>Privacy Secure</span>
-                  <span className="text-green-500 flex items-center gap-1"><Check size={10}/> HIPAA Compliant</span>
-                </div>
-                <p className="text-[11px] text-slate-500 leading-relaxed text-left">Images are processed via secure end-to-end encryption. No PII is stored in our generative models.</p>
-              </div>
-
-              <div className="flex items-center justify-center gap-2">
-                <span className="w-12 h-0.5 bg-slate-200 rounded-full" />
-                <span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">or try example</span>
-                <span className="w-12 h-0.5 bg-slate-200 rounded-full" />
-              </div>
-
-              <div className="grid grid-cols-4 gap-3 mt-6">
-                {[1, 2, 3, 4].map(i => (
-                  <button 
-                    key={i}
-                    onClick={(e) => { e.stopPropagation(); setImage(`https://picsum.photos/seed/smile${i}/600/600`); }}
-                    className="aspect-square rounded-xl overflow-hidden hover:ring-4 ring-brand-400/30 transition-all shadow-sm"
-                  >
-                    <img src={`https://picsum.photos/seed/smile${i}/150/150`} alt="Example" className="w-full h-full object-cover" />
-                  </button>
-                ))}
-              </div>
-
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                className="hidden" 
-                accept="image/*" 
-                onChange={handleFileUpload} 
-              />
-            </motion.div>
-          ) : (
-            <motion.div 
-              key="result-view"
-              className="relative"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-            >
-              {!result ? (
-                <div className="relative aspect-square rounded-[2.5rem] overflow-hidden glass-card border-4 border-white flex flex-col items-center justify-center p-12 text-center group">
-                  <img src={image} alt="Original" className="absolute inset-0 w-full h-full object-cover opacity-20 pointer-events-none" referrerPolicy="no-referrer" />
+      {/* Main Workspace */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 mt-8 sm:mt-12">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+          
+          {/* Left: Upload Workspace */}
+          <div className="lg:col-span-7">
+            <div className={`bg-white rounded-[2rem] sm:rounded-[2.5rem] p-8 sm:p-12 h-full flex flex-col items-center justify-center text-center border border-slate-100 shadow-sm relative overflow-hidden min-h-[400px] sm:min-h-[500px] cursor-pointer hover:border-brand-200 transition-colors ${image ? 'p-4' : ''}`} onClick={() => !image && fileInputRef.current?.click()}>
+              {!image ? (
+                <>
+                  <div className="w-16 h-16 sm:w-20 sm:h-20 bg-slate-50 rounded-3xl flex items-center justify-center text-slate-400 mb-8">
+                    <ImageIcon size={32} />
+                  </div>
+                  <h3 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-2">Drop a smiling photo</h3>
+                  <p className="text-slate-500 text-sm mb-10">PNG or JPG · up to 20 MB · 1:1 or portrait works best</p>
                   
-                  {isProcessing ? (
-                    <div className="relative z-10 flex flex-col items-center">
-                       <div className="w-24 h-24 rounded-full border-4 border-brand-100 flex items-center justify-center mb-6 bg-white/50 backdrop-blur-md shadow-2xl relative">
-                          <motion.div 
-                            animate={{ rotate: 360 }}
-                            transition={{ repeat: Infinity, duration: 3, ease: "linear" }}
-                            className="absolute inset-0 border-t-4 border-brand-500 rounded-full"
-                          />
-                          <Sparkles size={40} className="text-brand-500 animate-pulse" />
-                       </div>
-                       <h3 className="text-2xl font-bold mb-2">Simulating Smile</h3>
-                       <p className="text-slate-500 max-w-xs animate-pulse">Our neural network is mapping 128 dental landmarks to generate your custom preview...</p>
-                    </div>
-                  ) : (
-                    <div className="relative z-10">
-                       <button onClick={processImage} className="btn-primary scale-110 shadow-2xl shadow-brand-500/20">
-                         Create AI Enhanced Preview
-                       </button>
-                    </div>
-                  )}
-                </div>
+                  <button className="bg-slate-900 text-white px-8 py-3.5 rounded-full font-bold text-sm flex items-center gap-2 hover:bg-slate-800 transition-all active:scale-95">
+                    <Upload size={18} />
+                    Browse files
+                  </button>
+                </>
               ) : (
-                <ImageComparison before={image} after={result} />
+                <div className="w-full h-full relative rounded-2xl overflow-hidden">
+                   {result ? (
+                     <>
+                        <ImageComparison before={image} after={result} />
+                        <div className="absolute bottom-6 right-6 flex gap-2 z-30">
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); handleDownload(); }} 
+                            className="bg-brand-600 hover:bg-brand-500 text-white p-4 rounded-full shadow-2xl transition-all active:scale-90 flex items-center gap-2 group"
+                          >
+                            <Download size={20} />
+                            <span className="max-w-0 overflow-hidden group-hover:max-w-xs transition-all duration-300 text-[10px] font-black uppercase tracking-widest">Download Hasil</span>
+                          </button>
+                        </div>
+                     </>
+                   ) : (
+                     <div className="w-full h-full flex items-center justify-center relative">
+                        <img src={image} alt="Original" className="w-full h-full object-contain" />
+                        {isProcessing && (
+                          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm flex flex-col items-center justify-center text-white p-8">
+                            <Loader2 className="animate-spin mb-4" size={40} />
+                            <p className="text-lg font-bold">Transforming Smile...</p>
+                            <p className="text-white/60 text-sm mt-2">Our AI is applying professional dental adjustments</p>
+                          </div>
+                        )}
+                        {!isProcessing && (
+                          <button onClick={(e) => { e.stopPropagation(); reset(); }} className="absolute top-4 right-4 bg-white/20 backdrop-blur text-white p-2 rounded-full hover:bg-white/40 transition-colors">
+                            <RefreshCw size={20} />
+                          </button>
+                        )}
+                     </div>
+                   )}
+                </div>
               )}
-              
-              {/* Floating metadata tag */}
-              <div className="absolute top-6 right-6 flex gap-2">
-                <span className="px-3 py-1 bg-brand-500 text-white text-[9px] font-bold rounded-full tracking-widest shadow-lg shadow-brand-500/20 uppercase">Simulation Active</span>
-                <span className="px-3 py-1 bg-white/80 backdrop-blur-md text-slate-900 text-[9px] font-bold rounded-full border border-white shadow-sm tracking-widest uppercase">V.3.1-PRO</span>
+              <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
+            </div>
+          </div>
+
+          {/* Right: Controls */}
+          <div className="lg:col-span-5">
+            <div className="bg-white rounded-[2rem] sm:rounded-[2.5rem] p-8 sm:p-10 border border-slate-100 shadow-sm space-y-10">
+              <div className="space-y-6">
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">STEP 2</p>
+                  <h2 className="text-2xl sm:text-3xl font-bold text-slate-900">Pick a direction.</h2>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-slate-900 uppercase tracking-widest">Describe the smile you want</label>
+                    <button className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 text-slate-500 rounded-lg text-[9px] font-black uppercase tracking-widest hover:bg-slate-200 transition-colors">
+                      <Sparkles size={11} /> Tips
+                    </button>
+                  </div>
+                  <textarea 
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    placeholder="Ask GIMU to make a subtle bright confident smile..."
+                    className="w-full h-32 p-4 bg-slate-50 border border-slate-100 rounded-2xl resize-none text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-sm"
+                  />
+                </div>
+
+                <div className="space-y-4">
+                   <p className="text-[11px] font-bold text-slate-900 uppercase tracking-widest">Quick presets</p>
+                   <div className="flex flex-wrap gap-3">
+                      {presets.map((preset) => (
+                        <button 
+                          key={preset.name}
+                          onClick={() => setPrompt(`Apply ${preset.name} treatment`)}
+                          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-[11px] font-bold uppercase tracking-wider transition-all active:scale-95 ${preset.special ? 'border-brand-100 bg-brand-50 text-brand-700 hover:bg-brand-100' : 'border-slate-100 bg-white text-slate-600 hover:border-slate-200 hover:bg-slate-50'}`}
+                        >
+                          {preset.special && <Sparkles size={12} className="text-brand-500" />}
+                          {preset.name}
+                        </button>
+                      ))}
+                   </div>
+                </div>
               </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+
+              <div className="pt-4">
+                <button 
+                  disabled={!image || isProcessing}
+                  onClick={processImage}
+                  className={`w-full py-4 sm:py-5 rounded-full font-black text-sm uppercase tracking-widest flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${!image || isProcessing ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-slate-900 text-white hover:bg-slate-800 shadow-xl shadow-slate-200'}`}
+                >
+                  <Sparkles size={18} />
+                  {isProcessing ? 'Transforming...' : 'Transform smile'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-    </section>
+
+      {/* Recent Transformations Section */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 mt-16 sm:mt-24">
+        <div className="bg-slate-100/50 rounded-[2.5rem] sm:rounded-[3rem] p-10 sm:p-16 border border-slate-200/40">
+           <div className="flex items-center justify-between mb-12">
+              <div className="space-y-2">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">RECENT · SMILE TOOL</p>
+                <h3 className="text-2xl sm:text-3xl font-bold text-slate-900">Your last transformations</h3>
+              </div>
+              <button className="flex items-center gap-2 text-xs font-bold text-slate-900 hover:opacity-70 transition-opacity uppercase tracking-widest">
+                See all <ArrowRight size={16} />
+              </button>
+           </div>
+
+           <div className="flex flex-col items-center justify-center py-12 text-center text-slate-400 space-y-6">
+              <div className="w-16 h-16 bg-slate-200/50 rounded-2xl flex items-center justify-center">
+                <ImageIcon size={32} />
+              </div>
+              <p className="text-sm font-medium">No smile transformations yet</p>
+           </div>
+        </div>
+      </div>
+    </div>
   );
 }

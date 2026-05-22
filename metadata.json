@@ -1,6 +1,6 @@
 {
   "name": "GIMU.AI",
-  "description": "Professional AI Smile Enhancer for dental clinics.",
+  "description": "Professional AI Smile Enhancer with Token-based billing for dental clinics.",
   "requestFramePermissions": [],
   "majorCapabilities": ["Image Analysis", "Image Generation"]
 }

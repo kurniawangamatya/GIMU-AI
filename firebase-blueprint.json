@@ -1,41 +1,118 @@
 {
   "entities": {
-    "users": {
-      "title": "User Profiles",
-      "description": "Registered dental professionals using the platform.",
+    "User": {
+      "title": "User",
+      "description": "User profile with credit information",
       "type": "object",
       "properties": {
         "uid": { "type": "string" },
         "email": { "type": "string" },
-        "displayName": { "type": "string" },
-        "clinicName": { "type": "string" },
-        "role": { "type": "string", "enum": ["user", "admin"] },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "credits": { "type": "number", "description": "Number of remaining generations" },
+        "lastRenewalMonth": { "type": "string", "description": "Month of last credit renewal (YYYY-M)" },
+        "lastRedeemedToken": { "type": "string", "description": "ID of the last successfully redeemed token" },
+        "redeemedCodes": { "type": "array", "description": "List of all redeemed tokens/codes" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["uid", "email"]
+      "required": ["uid", "email", "credits"]
     },
-    "scans": {
-      "title": "Smile Scans",
-      "description": "Patient smile transformations and analysis.",
+    "UsageLog": {
+      "title": "Usage Log",
+      "description": "Record of each generation attempt",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
-        "originalImageUrl": { "type": "string" },
-        "enhancedImageUrl": { "type": "string" },
-        "analysis": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "timestamp": { "type": "string", "format": "date-time" },
+        "type": { "type": "string", "enum": ["analyze", "enhance"] },
+        "cost": { "type": "number" }
       },
-      "required": ["userId", "originalImageUrl", "enhancedImageUrl"]
+      "required": ["userId", "timestamp", "type", "cost"]
+    },
+    "LicenseKey": {
+      "title": "License Key",
+      "description": "A one-time use code to add credits",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "value": { "type": "number", "description": "Credits granted by this key" },
+        "isUsed": { "type": "boolean" },
+        "usedBy": { "type": "string" },
+        "usedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "value", "isUsed"]
     }
   },
   "firestore": {
-    "/users/{userId}": {
-      "schema": "users",
-      "description": "User profile data."
+    "users/{userId}": {
+      "schema": "User",
+      "description": "Store user data and credits"
     },
-    "/scans/{scanId}": {
-      "schema": "scans",
-      "description": "Collection of dental smile enhancement scans."
+    "users/{userId}/usage/{usageId}": {
+      "schema": "UsageLog",
+      "description": "Logs for auditing consumption"
+    },
+    "licenseKeys/{keyId}": {
+      "schema": "LicenseKey",
+      "description": "Pool of valid generation tokens"
+    },
+    "admins/{userId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "email": { "type": "string" },
+          "role": { "type": "string" }
+        }
+      },
+      "description": "Authorized administrators"
+    },
+    "pending_payments/{orderId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "userId": { "type": "string" },
+          "tokens": { "type": "number" },
+          "packageId": { "type": "string" },
+          "amount": { "type": "number" },
+          "status": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "description": "Midtrans pending transactions for fulfillment"
+    },
+    "manual_payments/{paymentId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "userId": { "type": "string" },
+          "userEmail": { "type": "string" },
+          "packageName": { "type": "string" },
+          "tokens": { "type": "number" },
+          "amount": { "type": "number" },
+          "senderName": { "type": "string" },
+          "senderBank": { "type": "string" },
+          "receiptUrl": { "type": "string" },
+          "status": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "description": "Manual bank transfer reports for admin review"
+    },
+    "generations/{genId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "userId": { "type": "string" },
+          "type": { "type": "string" },
+          "beforeUrl": { "type": "string" },
+          "afterUrl": { "type": "string" },
+          "imageUrl": { "type": "string" },
+          "prompt": { "type": "string" },
+          "feedback": { "type": "string" },
+          "report": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "description": "User generation history for smile enhancement and radiology"
     }
   }
 }

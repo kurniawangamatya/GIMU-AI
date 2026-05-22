@@ -6,6 +6,7 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Helper functions
     function isSignedIn() {
       return request.auth != null;
     }
@@ -15,34 +16,114 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (request.auth.token.email_verified == true && (
+          request.auth.token.email == "kurniawangamatya37@gmail.com" ||
+          request.auth.token.email == "kurniawangamatya@gmail.com"
+        ))
+      );
+    }
+
+    match /_health_check/{docId} {
+      allow read: if true;
+    }
+
+    match /test/{docId} {
+      allow read: if true;
+    }
+
+    match /pending_payments/{orderId} {
+      allow read, write: if true;
+    }
+
+    match /manual_payments/{paymentId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isAdmin();
+    }
+
+    match /generations/{genId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update, delete: if isAdmin();
     }
 
     function isValidUser(data) {
-      return data.uid == request.auth.uid && 
-             data.email is string && 
-             data.email.size() <= 256 &&
-             (data.role == 'user' || (data.email == 'kurniawangamatya37@gmail.com' && data.role == 'admin'));
+      return data.uid is string && 
+             (data.get('email', '') is string || data.email == null) && 
+             data.credits is number && 
+             data.credits >= 0 &&
+             (data.get('lastRenewalMonth', null) == null || data.lastRenewalMonth is string) &&
+             (data.get('lastRedeemedToken', null) == null || data.lastRedeemedToken is string) &&
+             (data.get('redeemedCodes', null) == null || data.redeemedCodes is list);
     }
 
-    function isValidScan(data) {
-      return data.userId == request.auth.uid &&
-             data.originalImageUrl is string &&
-             data.enhancedImageUrl is string &&
-             data.createdAt == request.time;
+    match /admins/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
     }
 
     match /users/{userId} {
-      allow get: if isOwner(userId) || isAdmin();
-      allow create: if isSignedIn() && isValidUser(request.resource.data);
-      allow update: if isOwner(userId) && 
-                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clinicName', 'displayName']);
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && 
+                      isValidUser(request.resource.data) && 
+                      request.resource.data.credits == 5; // Initial quota
+      allow update: if (isOwner(userId) || isAdmin()) && 
+                      isValidUser(request.resource.data) &&
+                      (
+                        isAdmin() || 
+                        // Action 1: Spend credit
+                        (request.resource.data.credits < resource.data.credits &&
+                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['credits', 'updatedAt'])) ||
+                        
+                        // Action 2: Monthly Renewal (month changes, top up to 3)
+                        (request.resource.data.get('lastRenewalMonth', null) != resource.data.get('lastRenewalMonth', null) &&
+                         request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastRenewalMonth', 'updatedAt']) &&
+                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastRenewalMonth', 'updatedAt', 'credits']) &&
+                          (
+                            (resource.data.credits < 3 && request.resource.data.credits == 3) ||
+                            (resource.data.credits >= 3 && request.resource.data.credits == resource.data.credits)
+                          )
+                        ) ||
+
+                        // Action 3: Redeem Token/Code (lastRedeemedToken changes)
+                        (request.resource.data.get('lastRedeemedToken', null) != resource.data.get('lastRedeemedToken', null) &&
+                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastRedeemedToken', 'redeemedCodes', 'credits', 'updatedAt']) &&
+                         request.resource.data.redeemedCodes.hasAll(resource.data.get('redeemedCodes', [])) &&
+                         request.resource.data.redeemedCodes.hasAny([request.resource.data.lastRedeemedToken]) &&
+                         (
+                           // Sub-Action A: Normal License Key
+                           (existsAfter(/databases/$(database)/documents/licenseKeys/$(request.resource.data.lastRedeemedToken)) &&
+                            request.resource.data.credits == resource.data.credits + getAfter(/databases/$(database)/documents/licenseKeys/$(request.resource.data.lastRedeemedToken)).data.value &&
+                            getAfter(/databases/$(database)/documents/licenseKeys/$(request.resource.data.lastRedeemedToken)).data.usedBy == request.auth.uid) ||
+                           
+                           // Sub-Action B: Special Promo Code GIMUDENTALCARE
+                           (request.resource.data.lastRedeemedToken == 'GIMUDENTALCARE' && 
+                            request.resource.data.credits == resource.data.credits + 10 &&
+                            !(resource.data.get('redeemedCodes', []).hasAny(['GIMUDENTALCARE'])))
+                         )
+                        )
+                      );
+      
+      match /usage/{usageId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && 
+                        request.resource.data.userId == userId &&
+                        request.resource.data.cost is number;
+      }
     }
 
-    match /scans/{scanId} {
-      allow create: if isSignedIn() && isValidScan(request.resource.data);
-      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow get, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    match /licenseKeys/{keyId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update: if (isSignedIn() &&
+                      resource.data.isUsed == false &&
+                      request.resource.data.isUsed == true &&
+                      request.resource.data.usedBy == request.auth.uid &&
+                      request.resource.data.usedAt == request.time &&
+                      request.resource.data.code == resource.data.code &&
+                      request.resource.data.value == resource.data.value) || isAdmin();
     }
   }
 }
